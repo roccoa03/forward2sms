@@ -1,0 +1,116 @@
+#!/bin/bash
+shopt -s nocasematch
+
+
+MODEM_INDEX="${MODEM_INDEX:-0}"
+TARGET_NUMBER="${TARGET_NUMBER:-[+390123456789]}"
+KEYWORD="${KEYWORD:-credito}"
+ALERT_TEXT="${ALERT_TEXT:-allerta: credito residuo non sufficiente sul router}"
+DELETE_PROCESSED="${DELETE_PROCESSED:-0}"
+INTERVAL="${INTERVAL:-60}"
+STATE_DIR="${STATE_DIR:-/var/lib/smsforward}"
+
+command -v mmcli >/dev/null 2>&1 || {
+    logger -t smsforward "mmcli non disponibile"
+    exit 1
+}
+
+log() {
+    logger -t smsforward "$@"
+}
+
+
+send_sms() {
+	[ -n "$TARGET_NUMBER" ] || return 1
+	local out sms_path sent_state text
+	local text="${1:-}"
+	local target_number="$2"
+
+
+
+
+	# Il dollaro permette di interpretare correttamente il \n
+	local full_text=$(printf %b "Stai rimanendo a secco, è ora di fare una ricarica ... :\n\n${text}")
+
+	out=$(mmcli -m ${MODEM_INDEX} -J --messaging-create-sms="text=\"${full_text}\",number=\"${TARGET_NUMBER}\" ")
+	# sample output: 
+	## out={"modem":{"messaging":{"created-sms":"/org/freedesktop/ModemManager1/SMS/21"}}}
+
+	sms_path=$(echo $out | jq -r '.modem.messaging."created-sms"')
+	
+	sent_state=$(mmcli -s "${sms_path}" --send)
+	sent_state_output=$?
+
+	log $sent_state
+	echo "messaggio inviato con successo."
+
+	## delete processed message. 
+	if [ $sent_state_output -eq 0 ]; then
+		mmcli -m ${MODEM_INDEX} --messaging-delete-sms=${sms_path}
+		return 0
+
+	fi 
+}
+
+check() {
+	local path sms text state 
+	
+	# find all received messages. 
+	for path in $(mmcli -m ${MODEM_INDEX} --messaging-list-sms -J | jq -r '."modem.messaging.sms"[]'); do
+		# Controlla lo stato del singolo SMS
+		sms=$(mmcli -s "$path" -J | jq -r '.sms')
+		text=$(mmcli -s "$path" -J | jq -r '.sms.content."text"')
+		state=$(printf %s $sms | jq -r '.properties."state"')
+
+		local testo_pulito=$(echo "$text" | tr -d '\r\n' )
+
+
+		local verifica1="verifica di avere credito sufficiente"
+		local verifica2="il tuo credito residuo non è sufficiente per rinnovare l'offerta"
+
+
+		# Se lo stato è "received", stampa il percorso
+		if [ "$state" = "received" ]; then
+			echo "$testo_pulito"
+
+			if [[ "$testo_pulito" == *"$verifica1"* ]] || [[  "$testo_pulito" == *"$verifica2"* ]]; then
+				echo "$path"
+				echo "$testo_pulito"
+
+				if  send_sms "${testo_pulito}"; then
+					mmcli -m ${MODEM_INDEX} --messaging-delete-sms=${path}
+				fi 
+
+			fi 
+		fi
+	done
+
+}
+
+case "${1:-check}" in
+    check)
+        check
+        ;;
+    daemon)
+        while :; do
+            check
+            sleep "$INTERVAL"
+        done
+        ;;
+    list)
+        mmcli -m "$MODEM_INDEX" -J --messaging-list-sms
+        ;;
+    detail)
+        mmcli -s "${2:-}" -J
+        ;;
+    send)
+        send_sms "${2:-}"
+        ;;
+    reset)
+        rm -f "$STATE_DIR"/done/*
+        ;;
+    *)
+        echo "uso: smsforward {check|daemon|list|detail <id>|send <testo>|reset}"
+        exit 1
+        ;;
+esac
