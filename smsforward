@@ -3,7 +3,7 @@ shopt -s nocasematch
 
 
 MODEM_INDEX="${MODEM_INDEX:-0}"
-TARGET_NUMBER="${TARGET_NUMBER:-[+390123456789]}"
+TARGET_NUMBER="${TARGET_NUMBER:-}"
 KEYWORD="${KEYWORD:-credito}"
 ALERT_TEXT="${ALERT_TEXT:-allerta: credito residuo non sufficiente sul router}"
 DELETE_PROCESSED="${DELETE_PROCESSED:-0}"
@@ -29,7 +29,6 @@ send_sms() {
 
 
 
-	# Il dollaro permette di interpretare correttamente il \n
 	local full_text=$(printf %b "Stai rimanendo a secco, è ora di fare una ricarica ... :\n\n${text}")
 
 	out=$(mmcli -m ${MODEM_INDEX} -J --messaging-create-sms="text=\"${full_text}\",number=\"${TARGET_NUMBER}\" ")
